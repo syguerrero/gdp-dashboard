@@ -1,151 +1,53 @@
 import streamlit as st
 import pandas as pd
 import math
-from pathlib import Path
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 
-# Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title='Éxito Profesional',
+    page_icon=':mortar_board:',
 )
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.title("🎓 Dashboard de Éxito Profesional")
+st.write("Sube un archivo CSV con datos de alumnos para predecir su probabilidad de éxito (salario alto y satisfacción profesional).")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+data_file = st.file_uploader("Sube tu archivo CSV", type=["csv"])
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+if data_file:
+    df = pd.read_csv(data_file)
+    original_df = df.copy()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    required_columns = ["Starting_Salary", "Career_Satisfaction", "Gender", "Field_of_Study", "Current_Job_Level", "Entrepreneurship"]
+    if not all(col in df.columns for col in required_columns):
+        st.error("El archivo CSV no contiene todas las columnas necesarias.")
+    else:
+        df["Exito"] = ((df["Starting_Salary"] >= 45000) & (df["Career_Satisfaction"] >= 7)).astype(int)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+        X = df.drop(columns=["Exito", "Student_ID", "Career_Satisfaction", "Job_Offers"], errors='ignore')
+        y = df["Exito"]
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+        for col in X.select_dtypes(include='object').columns:
+            le = LabelEncoder()
+            X[col] = le.fit_transform(X[col])
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+        clf = RandomForestClassifier(random_state=42)
+        clf.fit(X, y)
 
-    return gdp_df
+        st.subheader("Datos cargados")
+        st.dataframe(original_df.head())
 
-gdp_df = get_gdp_data()
+        st.subheader("Resultados de predicción")
+        prob = clf.predict_proba(X)[:, 1]
+        original_df["Probabilidad_Exito"] = (prob * 100).round(2)
+        original_df["Es_Exitoso"] = clf.predict(X)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+        st.dataframe(original_df[["Probabilidad_Exito", "Es_Exitoso"] + [col for col in original_df.columns if col not in ["Probabilidad_Exito", "Es_Exitoso"]]].head())
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+        csv = original_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Descargar resultados con predicciones",
+            data=csv,
+            file_name="predicciones_exito.csv",
+            mime="text/csv"
         )
